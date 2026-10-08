@@ -82,6 +82,55 @@ Impostazioni → **Dove trascrivere → Nel cloud con Groq**. Usa Whisper large-
 - Il riconoscimento di chi parla resta nel browser (modello voci ~26 MB, su CPU).
 - L'audio delle frasi viene inviato a Groq. Senza connessione le frasi aspettano in memoria e partono quando torna la rete.
 
+## Lettura ad alta voce
+
+Due modi di usarla:
+
+- **Text to Speech** (pulsante nella barra laterale, sotto **Speech to Text**): apre un testo nuovo. Scrivi o incolla, scegli la voce, premi **Leggi**. Il testo si salva in archivio insieme alle trascrizioni (campo `kind: 'tts'` nello stesso documento Firestore) e si riapre da lì, con la voce scelta.
+- **Altoparlante in alto a destra**, con una trascrizione aperta: la legge dall'inizio, evidenziando la frase in corso. Nel pannello scegli una voce per ogni persona; la scelta resta salvata nella trascrizione.
+
+In entrambi i casi, a lettura generata **Scarica .wav** salva l'audio. Le voci si aggiungono e si eliminano in **Impostazioni** (o da **Gestisci voci**).
+
+Tre tipi di voce:
+
+| Tipo | Dove gira | Cosa serve |
+|---|---|---|
+| Voci pronte | nel browser | niente: la voce (28–64 MB) si scarica al primo uso e resta in cache |
+| Voce Piper addestrata | nel browser | i due file `.onnx` e `.onnx.json` di una voce addestrata sulle tue registrazioni |
+| Voce clonata | server sul tuo computer | 10–30 s di registrazione e il server della cartella `server/` acceso |
+
+Le voci pronte sono quelle di [Piper](https://huggingface.co/rhasspy/piper-voices) (italiano: Paola, Serena, Riccardo; più inglese, francese, spagnolo, tedesco, portoghese). Ogni voce ha la sua licenza, indicata nella scheda del modello. Al primo uso si scarica anche il dizionario dei fonemi (18 MB).
+
+Le voci aggiunte restano nell'IndexedDB di quel browser, campione audio compreso: non vanno su Firestore né su GitHub. Usa solo voci di persone che hanno dato il consenso.
+
+### Voce Piper addestrata
+
+Dà una voce che funziona nel browser come quelle pronte, anche senza rete. L'addestramento si fa fuori dal sito e richiede una scheda grafica NVIDIA (va bene un notebook Colab).
+
+1. Registra 30–60 minuti della stessa persona, in ambiente silenzioso, e taglia l'audio in frasi di 2–15 secondi (file WAV).
+2. Scrivi `metadata.csv` con una riga per file: `frase001.wav|Testo pronunciato nella frase.`
+3. Segui la [guida di Piper](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/TRAINING.md): `python3 -m piper.train fit` con `--data.espeak_voice it`, `--model.sample_rate 22050` e, per fare prima, `--ckpt_path` puntato a un [checkpoint](https://huggingface.co/datasets/rhasspy/piper-checkpoints) di qualità `medium` (per l'italiano: `it/it_IT/serena/medium`).
+4. Esporta con `python3 -m piper.train.export_onnx`. Ottieni `voce.onnx`; il file scritto da `--data.config_path` durante l'addestramento va rinominato `voce.onnx.json`.
+5. Nel sito: Impostazioni → **Aggiungi una voce Piper addestrata**, scegli i due file insieme.
+
+### Voce clonata (server locale)
+
+Il modello di clonazione è [XTTS-v2](https://huggingface.co/coqui/XTTS-v2): pesa circa 1,9 GB e non gira nel browser, quindi parte da un piccolo server Python sul tuo computer. Licenza Coqui CPML: solo uso non commerciale (il server chiede di accettarla al primo avvio).
+
+```bash
+cd server
+python -m venv .venv
+.venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+python clone_server.py
+```
+
+Serve Python 3.10 o più recente. Poi nel sito: Impostazioni → **Clona una voce da una registrazione** → **Verifica server** → carica un file audio o registra dal microfono → **Aggiungi voce**.
+
+- Senza scheda grafica NVIDIA la sintesi gira sul processore ed è lenta (più lenta del parlato). Con `--device cuda` e PyTorch per CUDA è molto più rapida.
+- Il sito, anche da GitHub Pages, chiama `http://127.0.0.1:8020`. Chrome ed Edge lo permettono, chiedendo il permesso di accedere alla rete locale; Safari no.
+- Il server ascolta solo su questo computer e non salva nulla su disco. Per limitarlo al tuo sito: `python clone_server.py --origin https://TUONOME.github.io`.
+
 ## Unione delle frasi
 
 Impostazioni → Interlocutori → **Unisci le frasi consecutive della stessa persona** (attiva di default). Due frasi della stessa persona separate da una pausa sotto la soglia (default 8 s) diventano un solo paragrafo. **Unisci ora** applica la regola alla trascrizione aperta, anche a quelle già in archivio.
@@ -113,7 +162,10 @@ js/cloud.js         trascrizione Groq a gruppi
 js/speakers.js      raggruppamento online delle voci
 js/store.js         Firebase Auth + Firestore
 js/export.js        esportazioni
+js/tts.js           lettura ad alta voce: voci, riproduzione, archivio voci
+js/tts-worker.js    Piper nel browser (Web Worker)
 js/config.js        la tua configurazione Firebase
+server/             server locale per le voci clonate (XTTS-v2)
 firestore.rules     regole di sicurezza
 ```
 

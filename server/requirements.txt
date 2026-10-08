@@ -1,0 +1,4 @@
+# torch 2.9+ richiede torchcodec e FFmpeg per leggere l'audio: qui non servono
+torch<2.9
+torchaudio<2.9
+coqui-tts>=0.27

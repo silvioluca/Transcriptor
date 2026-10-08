@@ -3,6 +3,7 @@ import { Speakers } from './speakers.js';
 import * as store from './store.js';
 import { build, download, slug, clock } from './export.js';
 import { transcribeBatch } from './cloud.js';
+import { initTTS, setDoc, docState, speak, stopSpeaking, fillVoices } from './tts.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
@@ -59,11 +60,13 @@ const S = {
 };
 let localSeq = 0;
 
-function freshConv() {
+// kind: 'stt' = trascrizione dalla voce, 'tts' = testo da leggere ad alta voce
+function freshConv(kind = 'stt') {
   const now = new Date();
   const f = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
-  return { id: null, saved: false, title: 'Trascrizione del ' + f.format(now), createdAt: now, durationMs: 0 };
+  return { id: null, saved: false, kind, title: (kind === 'tts' ? 'Testo del ' : 'Trascrizione del ') + f.format(now), createdAt: now, durationMs: 0, text: '', voice: '' };
 }
+const isTts = () => S.conv.kind === 'tts';
 
 /* ---------------- worker modelli ---------------- */
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -532,10 +535,20 @@ function ensureConvId() {
 }
 
 function convMeta() {
+  if (isTts()) {
+    return {
+      kind: 'tts',
+      title: S.conv.title,
+      text: S.conv.text,
+      voice: S.conv.voice,
+      preview: S.conv.text.replace(/\s+/g, ' ').trim().slice(0, 180),
+    };
+  }
   const talk = {};
   for (const s of S.segs) if (s.status === 'done') talk[s.speaker] = (talk[s.speaker] || 0) + (s.end - s.start);
   const done = S.segs.filter((s) => s.status === 'done');
   return {
+    kind: 'stt',
     title: S.conv.title,
     durationMs: Math.round(Math.max(S.conv.durationMs || 0, S.rec !== 'idle' ? rec.nowMs : 0)),
     speakers: speakers.toMap(),
@@ -566,12 +579,32 @@ let metaTimer = null;
 function saveMeta(now = false) {
   if (!S.user || !S.conv.saved) return;
   clearTimeout(metaTimer);
+  metaTimer = null;
   const go = () => {
+    metaTimer = null;
     const meta = convMeta();
     store.updateConversation(S.conv.id, meta).catch(saveError);
     upsertArchiveItem({ id: S.conv.id, ...meta, updatedAt: new Date() });
   };
   if (now) go(); else metaTimer = setTimeout(go, 2500);
+}
+// prima di cambiare documento: non perdere le ultime modifiche in attesa
+function flushMeta() { if (metaTimer) saveMeta(true); }
+
+// testo da leggere modificato: si salva come le trascrizioni, se c'è l'accesso
+const TTS_MAX = 500000; // caratteri: un documento Firestore non supera 1 MiB
+function onDocChange() {
+  if (!isTts()) return;
+  const d = docState();
+  S.conv.text = d.text;
+  S.conv.voice = d.voice;
+  renderMeta();
+  updateBanner();
+  if (!S.user) return;
+  if (d.text.length > TTS_MAX) { saveError(new Error('testo troppo lungo per l\'archivio (massimo 500.000 caratteri).')); return; }
+  if (!S.conv.saved && !d.text.trim()) return;
+  ensureConvSaved();
+  saveMeta();
 }
 
 let lastSaveErr = 0;
@@ -588,6 +621,7 @@ function saveError(e) {
 // trascrizione fatta senza login: salvala tutta dopo l'accesso
 function saveAllNow() {
   if (!S.user || S.conv.saved) return;
+  if (isTts()) { if (S.conv.text.trim() && S.conv.text.length <= TTS_MAX) ensureConvSaved(); return; }
   const done = S.segs.filter((s) => s.status === 'done');
   if (!done.length) return;
   ensureConvSaved();
@@ -619,12 +653,18 @@ function upsertArchiveItem(it) {
 
 async function openConv(id) {
   if (S.rec !== 'idle') { toast('Termina la registrazione prima di aprire un\'altra trascrizione.'); return; }
-  if (S.conv.id === id && S.conv.saved) { closeDrawer(); return; }
+  if (S.conv.id === id && S.conv.saved) { closeDrawer(); closeSettings(); return; }
   closeDrawer();
-  status('Apro la trascrizione');
+  closeSettings();
+  flushMeta();
+  stopSpeaking();
+  status('Apro il documento');
   try {
     const { meta, segments } = await store.loadConversation(id);
-    S.conv = { id, saved: true, title: meta.title, createdAt: store.toDate(meta.createdAt), durationMs: meta.durationMs || 0 };
+    S.conv = {
+      id, saved: true, kind: meta.kind === 'tts' ? 'tts' : 'stt', title: meta.title, createdAt: store.toDate(meta.createdAt),
+      durationMs: meta.durationMs || 0, text: meta.text || '', voice: meta.voice || '',
+    };
     speakers.load(meta.speakers);
     S.segs = segments.map((s) => ({ ...s, status: 'done', saved: true }));
     S.queue = [];
@@ -636,14 +676,18 @@ async function openConv(id) {
   updateStatus();
 }
 
-function newConv() {
-  if (S.rec !== 'idle') { toast('Termina la registrazione prima di iniziarne una nuova.'); return; }
-  S.conv = freshConv();
+function newConv(kind = 'stt') {
+  if (S.rec !== 'idle') { toast('Termina la registrazione prima di iniziare un nuovo documento.'); return; }
+  flushMeta();
+  stopSpeaking();
+  S.conv = freshConv(kind);
   speakers.load(null);
   S.segs = [];
   S.queue = [];
   renderAll();
   closeDrawer();
+  closeSettings();
+  if (kind === 'tts') { $('ttsText').focus(); return; }
   $('title').focus();
   $('title').select();
 }
@@ -652,7 +696,18 @@ function newConv() {
 const nameOf = (id) => speakers.get(id)?.name || 'Persona';
 const colorOf = (id) => speakers.get(id)?.color || 'var(--faint)';
 
+// mostra la trascrizione oppure l'editor del testo da leggere
+function applyKind() {
+  const tts = isTts();
+  document.querySelector('.main').classList.toggle('tts-doc', tts);
+  $('ttsBtn').hidden = tts;
+  $('title').setAttribute('aria-label', tts ? 'Titolo del testo' : 'Titolo trascrizione');
+  closeReader();
+  if (tts) setDoc({ text: S.conv.text, voice: S.conv.voice });
+}
+
 function renderAll() {
+  applyKind();
   $('title').value = S.conv.title;
   document.title = S.conv.title + ' · Transcriptor';
   $('lines').replaceChildren();
@@ -787,6 +842,13 @@ function renderMeta() {
   const d = Math.max(S.conv.durationMs || 0, S.rec !== 'idle' ? rec.nowMs : 0);
   const f = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' });
   const parts = [f.format(S.conv.createdAt || new Date())];
+  if (isTts()) {
+    const c = S.conv.text.trim().length;
+    parts.push(c === 1 ? '1 carattere' : c.toLocaleString('it-IT') + ' caratteri');
+    if (S.user && S.conv.saved) parts.push('salvato');
+    $('meta').textContent = parts.join(', ');
+    return;
+  }
   if (d) parts.push(clock(d) + (d >= 3600000 ? '' : ' min'));
   if (n) parts.push(n === 1 ? '1 persona' : n + ' persone');
   if (S.user && S.conv.saved) parts.push('salvata');
@@ -959,7 +1021,10 @@ function placeMenu(m, anchor) {
   m.querySelector('button')?.focus();
 }
 function closeMenus() { $('exportMenu').hidden = true; menu.hidden = true; }
-document.addEventListener('click', (e) => { if (!e.target.closest('.menu')) closeMenus(); });
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.menu')) closeMenus();
+  if (!e.target.closest('.reader')) closeReader();
+});
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenus(); });
 
 $('exportBtn').addEventListener('click', (e) => {
@@ -968,6 +1033,8 @@ $('exportBtn').addEventListener('click', (e) => {
   if (!m.hidden) { closeMenus(); return; }
   m.querySelector('[data-export="delete"]').hidden = !(S.user && S.conv.saved);
   m.querySelector('hr').hidden = !(S.user && S.conv.saved);
+  for (const f of ['md', 'srt', 'json']) m.querySelector(`[data-export="${f}"]`).hidden = isTts();
+  m.querySelector('[data-export="delete"]').textContent = isTts() ? 'Elimina testo' : 'Elimina trascrizione';
   placeMenu(m, e.currentTarget);
 });
 
@@ -978,9 +1045,10 @@ $('exportMenu').addEventListener('click', async (e) => {
   const f = b.dataset.export;
   const segs = S.segs.filter((s) => s.status === 'done');
   if (f === 'delete') return confirmDelete(S.conv.id, S.conv.title);
-  if (!segs.length) { toast('Niente da esportare: la trascrizione è vuota.'); return; }
+  if (isTts() ? !S.conv.text.trim() : !segs.length) { toast(isTts() ? 'Niente da esportare: il testo è vuoto.' : 'Niente da esportare: la trascrizione è vuota.'); return; }
+  if (isTts() && f === 'txt') return download(S.conv.text, `${slug(S.conv.title)}.txt`);
   if (f === 'copy') {
-    try { await navigator.clipboard.writeText(build('txt', S.conv, segs, nameOf)); toast('Testo copiato'); }
+    try { await navigator.clipboard.writeText(isTts() ? S.conv.text : build('txt', S.conv, segs, nameOf)); toast('Testo copiato'); }
     catch { toast('Copia non riuscita'); }
     return;
   }
@@ -991,8 +1059,9 @@ $('exportMenu').addEventListener('click', async (e) => {
 function confirmDelete(id, title) {
   if (S.rec !== 'idle' && S.conv.id === id) { toast('Termina la registrazione prima di eliminarla.'); return; }
   const d = $('confirm');
-  $('confirmTitle').textContent = 'Eliminare la trascrizione?';
-  $('confirmText').textContent = `"${title}" verrà eliminata dall'archivio. L'operazione non si può annullare.`;
+  const tts = (S.conv.id === id ? S.conv : S.archive.items.find((x) => x.id === id) || {}).kind === 'tts';
+  $('confirmTitle').textContent = tts ? 'Eliminare il testo?' : 'Eliminare la trascrizione?';
+  $('confirmText').textContent = `"${title}" verrà ${tts ? 'eliminato' : 'eliminata'} dall'archivio. L'operazione non si può annullare.`;
   d.returnValue = '';
   d.showModal();
   d.onclose = async () => {
@@ -1000,9 +1069,9 @@ function confirmDelete(id, title) {
     try {
       await store.deleteConversation(id);
       S.archive.items = S.archive.items.filter((x) => x.id !== id);
-      if (S.conv.id === id) { S.conv = freshConv(); speakers.load(null); S.segs = []; renderAll(); }
+      if (S.conv.id === id) { clearTimeout(metaTimer); metaTimer = null; stopSpeaking(); S.conv = freshConv(); speakers.load(null); S.segs = []; renderAll(); }
       else renderArchive();
-      toast('Trascrizione eliminata');
+      toast(tts ? 'Testo eliminato' : 'Trascrizione eliminata');
     } catch (e) { saveError(e); }
   };
 }
@@ -1026,14 +1095,14 @@ function renderArchive() {
     return;
   }
   if (!S.user) {
-    box.replaceChildren(el('p', { class: 'archive-note' }, 'Accedi per salvare le trascrizioni e ritrovarle qui, su qualsiasi dispositivo.'));
+    box.replaceChildren(el('p', { class: 'archive-note' }, 'Accedi per salvare trascrizioni e testi e ritrovarli qui, su qualsiasi dispositivo.'));
     $('moreConv').hidden = true;
     return;
   }
   const q = $('search').value.trim().toLowerCase();
   const items = S.archive.items.filter((it) => !q || (it.title || '').toLowerCase().includes(q) || (it.preview || '').toLowerCase().includes(q));
   if (!items.length) {
-    box.replaceChildren(el('p', { class: 'archive-note' }, q ? 'Nessun risultato.' : S.archive.loading ? 'Carico…' : 'Le trascrizioni salvate compariranno qui.'));
+    box.replaceChildren(el('p', { class: 'archive-note' }, q ? 'Nessun risultato.' : S.archive.loading ? 'Carico…' : 'Trascrizioni e testi salvati compariranno qui.'));
   } else {
     const out = [];
     let grp = null;
@@ -1045,7 +1114,9 @@ function renderArchive() {
       const talk = it.talk || {};
       const tot = Object.values(talk).reduce((a, b) => a + b, 0) || 1;
       const bar = el('span', { class: 'bar' }, ...Object.entries(talk).map(([id, v]) => el('i', { style: `width:${(v / tot) * 100}%;background:${sp[id]?.color || 'var(--faint)'}` })));
-      const sub = [clock(it.durationMs || 0), Object.keys(sp).length ? Object.keys(sp).length + (Object.keys(sp).length === 1 ? ' persona' : ' persone') : null].filter(Boolean).join(', ');
+      const sub = it.kind === 'tts'
+        ? 'Text to Speech'
+        : [clock(it.durationMs || 0), Object.keys(sp).length ? Object.keys(sp).length + (Object.keys(sp).length === 1 ? ' persona' : ' persone') : null].filter(Boolean).join(', ');
       out.push(el('div', { class: 'conv-item' },
         el('button', { class: 'conv', type: 'button', 'aria-current': String(it.id === S.conv.id), onclick: () => openConv(it.id) },
           el('strong', {}, it.title || 'Senza titolo'), el('span', {}, sub), it.preview ? el('span', {}, it.preview) : null, tot > 1 ? bar : null),
@@ -1061,7 +1132,8 @@ function renderArchive() {
 
 $('search').addEventListener('input', renderArchive);
 $('moreConv').addEventListener('click', () => loadArchive(false));
-$('newConv').addEventListener('click', newConv);
+$('newConv').addEventListener('click', () => newConv('stt'));
+$('newTts').addEventListener('click', () => newConv('tts'));
 
 function renderAccount() {
   const box = $('account');
@@ -1105,6 +1177,8 @@ async function login() {
 }
 async function logout() {
   if (S.rec !== 'idle') { toast('Termina la registrazione prima di uscire.'); return; }
+  flushMeta();
+  stopSpeaking();
   await store.signOut();
   S.conv = freshConv();
   speakers.load(null);
@@ -1114,10 +1188,10 @@ async function logout() {
 
 function updateBanner() {
   const b = $('banner');
-  const show = store.configured && !S.user && S.segs.some((s) => s.status === 'done');
+  const show = store.configured && !S.user && (isTts() ? !!S.conv.text.trim() : S.segs.some((s) => s.status === 'done'));
   b.hidden = !show;
   if (show && !b.firstChild) {
-    b.append(el('span', {}, 'Non hai effettuato l\'accesso: questa trascrizione non verrà salvata.'),
+    b.append(el('span', {}, 'Non hai effettuato l\'accesso: questo documento non verrà salvato.'),
       el('button', { class: 'btn small', type: 'button', onclick: login }, 'Accedi e salva'));
   }
 }
@@ -1214,6 +1288,7 @@ $('optMic').addEventListener('change', async (e) => {
   if (S.rec !== 'idle') { await stopRec(); startRec(); }
 });
 function openSettings() {
+  closeReader();
   refreshMics();
   deviceInfo();
   closeDrawer();
@@ -1237,6 +1312,53 @@ $('closeSettings').addEventListener('click', () => closeSettings());
 window.addEventListener('popstate', () => { if (location.hash === '#impostazioni') openSettings(); else closeSettings(true); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('settingsView').hidden && !document.querySelector('dialog[open]')) closeSettings(); });
 if (location.hash === '#impostazioni') history.replaceState(null, '', location.pathname + location.search);
+
+/* ---------------- lettura ad alta voce ---------------- */
+// pannello del pulsante in alto: legge la trascrizione aperta, una voce per persona
+const reader = $('reader');
+function renderReader() {
+  $('readerPeople').replaceChildren(...speakers.list.map((sp) => {
+    const sel = el('select', { 'aria-label': 'Voce di ' + sp.name });
+    fillVoices(sel, sp.voice, 'Predefinita');
+    sel.addEventListener('change', () => { sp.voice = sel.value; saveMeta(true); });
+    return el('label', { class: 'reader-person', style: `--c:${sp.color}` }, el('span', {}, el('i'), sp.name), sel);
+  }));
+}
+function closeReader() { reader.hidden = true; $('ttsBtn').setAttribute('aria-expanded', 'false'); }
+$('ttsBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!reader.hidden) { closeReader(); return; }
+  closeMenus();
+  renderReader();
+  placeMenu(reader, e.currentTarget);
+  $('ttsBtn').setAttribute('aria-expanded', 'true');
+});
+$('readerPlay').addEventListener('click', () => {
+  if (S.rec !== 'idle') { toast('Termina la registrazione prima di far leggere la trascrizione.', 5000); return; }
+  const segs = S.segs.filter((sg) => sg.status === 'done');
+  if (!segs.length) { toast('La trascrizione è vuota: non c\'è niente da leggere.'); return; }
+  const lang = settings.lang === 'auto' ? null : settings.lang;
+  speak('reader', segs.map((sg) => ({ text: sg.text, voice: speakers.get(sg.speaker)?.voice, lang })), (i) => {
+    $('lines').querySelector('.line.reading')?.classList.remove('reading');
+    const li = i >= 0 && segs[i].el;
+    if (!li || !li.isConnected) return;
+    li.classList.add('reading');
+    li.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeReader(); });
+
+initTTS({
+  el,
+  toast,
+  onDoc: onDocChange,
+  onVoices: () => { if (!reader.hidden) renderReader(); },
+  fileName: () => slug(S.conv.title),
+  manageVoices: () => {
+    openSettings();
+    $('voicesBox').scrollIntoView({ block: 'start' });
+  },
+});
 
 async function refreshMics() {
   const mics = await listMics();
@@ -1304,6 +1426,7 @@ async function wakeLock(on) {
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.rec === 'rec') wakeLock(true); });
 window.addEventListener('beforeunload', (e) => {
+  flushMeta();
   if (S.rec !== 'idle' || S.queue.length || S.busy?.kind === 'final' || (store.configured && !S.user && S.segs.length)) {
     e.preventDefault();
     e.returnValue = '';
@@ -1311,7 +1434,7 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); $('recBtn').click(); }
+  if (e.code === 'Space' && e.target === document.body && !isTts()) { e.preventDefault(); $('recBtn').click(); }
 });
 
 /* ---------------- avvio ---------------- */

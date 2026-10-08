@@ -28,9 +28,13 @@
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
-      <button class="btn primary wide" id="newConv">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        Nuova trascrizione
+      <button class="btn primary wide" id="newConv" title="Nuova trascrizione dalla voce">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v3"/></svg>
+        Speech to Text
+      </button>
+      <button class="btn wide" id="newTts" title="Nuovo testo da leggere ad alta voce">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l5 4V6L7 10H4zM16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>
+        Text to Speech
       </button>
       <label class="search">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>
@@ -54,6 +58,9 @@
         <div class="top-actions">
           <button class="icon-btn" id="exportBtn" aria-label="Esporta" aria-haspopup="menu" title="Esporta">
             <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 19h14"/></svg>
+          </button>
+          <button class="icon-btn" id="ttsBtn" aria-label="Leggi la trascrizione" aria-haspopup="dialog" title="Leggi la trascrizione">
+            <svg viewBox="0 0 24 24"><path d="M4 10v4h3l5 4V6L7 10H4zM16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>
           </button>
           <button class="icon-btn" id="settingsBtn" aria-label="Impostazioni" title="Impostazioni">
             <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
@@ -182,7 +189,94 @@
         </label>
       </fieldset>
 
+      <div id="voicesBox">
+      <fieldset class="field">
+        <legend>Aggiungi una voce Piper addestrata</legend>
+        <small class="help">Una voce addestrata sulle tue registrazioni è fatta di due file: <code>voce.onnx</code> e <code>voce.onnx.json</code>. Restano salvati in questo browser e funzionano senza rete. Come addestrarla: vedi README.</small>
+        <label class="field">
+          <span>Nome</span>
+          <input id="ttsPiperName" type="text" maxlength="40" autocomplete="off" placeholder="La mia voce">
+        </label>
+        <label class="field">
+          <span>File .onnx e .onnx.json</span>
+          <input id="ttsPiperFiles" type="file" multiple accept=".onnx,.json">
+        </label>
+        <button type="button" class="btn small tts-start" id="ttsPiperAdd">Aggiungi voce</button>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend>Clona una voce da una registrazione</legend>
+        <small class="help">Bastano 10–30 secondi di parlato pulito, una sola persona, senza musica. Il modello di clonazione (XTTS-v2) è troppo grande per il browser: gira su un piccolo server sul tuo computer (cartella <code>server/</code>, vedi README). Il campione e il testo vengono inviati solo a quel server. Usa solo voci di persone che hanno dato il consenso.</small>
+        <label class="field">
+          <span>Indirizzo del server</span>
+          <input id="ttsServer" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8020">
+        </label>
+        <div class="tts-row">
+          <button type="button" class="btn small" id="ttsServerTest">Verifica server</button>
+          <small class="help" id="ttsServerInfo"></small>
+        </div>
+        <label class="field">
+          <span>Nome</span>
+          <input id="ttsCloneName" type="text" maxlength="40" autocomplete="off" placeholder="Voce clonata">
+        </label>
+        <label class="field">
+          <span>Campione audio</span>
+          <input id="ttsCloneFile" type="file" accept="audio/*,video/*">
+        </label>
+        <div class="tts-row">
+          <button type="button" class="btn small" id="ttsCloneRec">Registra dal microfono</button>
+          <small class="help" id="ttsCloneInfo"></small>
+        </div>
+        <audio id="ttsClonePreview" controls hidden></audio>
+        <button type="button" class="btn small tts-start" id="ttsCloneAdd">Aggiungi voce</button>
+      </fieldset>
+
+      <fieldset class="field" id="ttsMineBox" hidden>
+        <legend>Le tue voci</legend>
+        <ul class="tts-mine" id="ttsMine"></ul>
+      </fieldset>
+
+      </div>
+
       <p class="device" id="deviceInfo"></p>
+        </div>
+      </section>
+
+      <section class="tts-view" id="ttsView" aria-label="Testo da leggere">
+        <div class="tts-body">
+          <textarea id="ttsText" aria-label="Testo da leggere" placeholder="Scrivi o incolla qui il testo da leggere ad alta voce"></textarea>
+          <div class="tts-controls">
+            <label class="field">
+              <span>Voce</span>
+              <select id="ttsVoice"></select>
+            </label>
+            <label class="field" id="ttsLangBox" hidden>
+              <span>Lingua del testo</span>
+              <select id="ttsLang">
+                <option value="it">Italiano</option>
+                <option value="en">Inglese</option>
+                <option value="fr">Francese</option>
+                <option value="es">Spagnolo</option>
+                <option value="de">Tedesco</option>
+                <option value="pt">Portoghese</option>
+              </select>
+            </label>
+            <label class="range">
+              <span>Velocità <output id="ttsSpeedOut"></output></span>
+              <input type="range" id="ttsSpeed" min="0.6" max="1.6" step="0.05">
+            </label>
+          </div>
+          <small class="help" id="ttsVoiceInfo"></small>
+          <div class="tts-actions">
+            <button type="button" class="btn primary" id="ttsPlay">Leggi</button>
+            <button type="button" class="btn" id="ttsStop" hidden>Ferma</button>
+            <button type="button" class="btn" id="ttsSave" disabled>Scarica .wav</button>
+            <button type="button" class="btn ghost" id="ttsManage">Gestisci voci</button>
+          </div>
+          <div class="tts-state">
+            <p class="device" id="ttsStatus" role="status"></p>
+            <div class="progress" id="ttsProgress" hidden><i id="ttsProgressBar"></i></div>
+          </div>
         </div>
       </section>
 
@@ -221,6 +315,26 @@
   </div>
 
   <div class="menu" id="speakerMenu" role="menu" hidden></div>
+
+  <div class="reader" id="reader" role="dialog" aria-labelledby="readerTitle" hidden>
+    <h2 id="readerTitle">Leggi la trascrizione</h2>
+    <p class="help">Scegli una voce per ogni persona.</p>
+    <div class="reader-people" id="readerPeople"></div>
+    <label class="range">
+      <span>Velocità <output id="readerSpeedOut"></output></span>
+      <input type="range" id="readerSpeed" min="0.6" max="1.6" step="0.05">
+    </label>
+    <div class="tts-actions">
+      <button type="button" class="btn primary" id="readerPlay">Leggi</button>
+      <button type="button" class="btn" id="readerStop" hidden>Ferma</button>
+      <button type="button" class="btn" id="readerSave" disabled>Scarica .wav</button>
+      <button type="button" class="btn ghost" id="readerManage">Gestisci voci</button>
+    </div>
+    <div class="tts-state">
+      <p class="device" id="readerStatus" role="status"></p>
+      <div class="progress" id="readerProgress" hidden><i id="readerProgressBar"></i></div>
+    </div>
+  </div>
 
 
   <dialog id="confirm" class="sheet small">

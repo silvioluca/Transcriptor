@@ -21,6 +21,7 @@ export class Speakers {
         id,
         name: s.name,
         color: s.color,
+        voice: s.voice || '',
         n: s.n || 0,
         sum: s.c ? Float32Array.from(s.c, (x) => x * (s.n || 1)) : null,
       });
@@ -31,7 +32,7 @@ export class Speakers {
     const out = {};
     this.list.forEach((s, i) => {
       const c = s.sum && s.n ? Array.from(s.sum, (x) => Math.round((x / s.n) * 1e4) / 1e4) : null;
-      out[s.id] = { name: s.name, color: s.color, order: i, n: s.n, ...(c ? { c } : {}) };
+      out[s.id] = { name: s.name, color: s.color, order: i, n: s.n, ...(s.voice ? { voice: s.voice } : {}), ...(c ? { c } : {}) };
     });
     return out;
   }
