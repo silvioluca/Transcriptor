@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Transcriptor</title>
+  <meta name="description" content="Trascrizione dal vivo con riconoscimento degli interlocutori. L'audio resta nel browser.">
+  <meta name="theme-color" content="#F4F6F9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#10141C" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2319202E'/%3E%3Crect x='6' y='9' width='9' height='4' rx='2' fill='%232D5BD7'/%3E%3Crect x='17' y='9' width='9' height='4' rx='2' fill='%23C2491D'/%3E%3Crect x='6' y='15' width='14' height='4' rx='2' fill='%230F8A6C'/%3E%3Crect x='6' y='21' width='7' height='4' rx='2' fill='%232D5BD7'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;1,7..72,400&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div class="shell" id="shell">
+    <aside class="archive" id="archive" aria-label="Archivio">
+      <div class="archive-head">
+        <a class="brand" href="./" aria-label="Transcriptor, inizio">
+          <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="7" width="12" height="5" rx="2.5" fill="#2D5BD7"/><rect x="16" y="7" width="14" height="5" rx="2.5" fill="#C2491D"/><rect x="2" y="14" width="19" height="5" rx="2.5" fill="#0F8A6C"/><rect x="2" y="21" width="8" height="5" rx="2.5" fill="#2D5BD7"/></svg>
+          <span>Transcriptor</span>
+        </a>
+        <button class="icon-btn only-mobile" id="closeArchive" aria-label="Chiudi archivio">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <button class="btn primary wide" id="newConv">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        Nuova trascrizione
+      </button>
+      <label class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>
+        <input id="search" type="search" placeholder="Cerca nell'archivio" autocomplete="off">
+      </label>
+      <nav class="conv-list" id="convList" aria-label="Trascrizioni salvate"></nav>
+      <button class="btn ghost wide" id="moreConv" hidden>Carica altre</button>
+      <div class="account" id="account"></div>
+    </aside>
+    <div class="scrim" id="scrim" hidden></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="openArchive" aria-label="Apri archivio">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+        </button>
+        <div class="title-wrap">
+          <input id="title" class="title" value="Nuova trascrizione" aria-label="Titolo trascrizione" maxlength="120">
+          <p class="meta" id="meta"></p>
+        </div>
+        <div class="top-actions">
+          <button class="icon-btn" id="exportBtn" aria-label="Esporta" aria-haspopup="menu" title="Esporta">
+            <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 19h14"/></svg>
+          </button>
+          <button class="icon-btn" id="settingsBtn" aria-label="Impostazioni" title="Impostazioni">
+            <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="ribbon-wrap" aria-label="Chi ha parlato e quando">
+        <canvas id="ribbon" class="ribbon" height="44"></canvas>
+        <div class="people" id="people"></div>
+      </section>
+
+      <div class="banner" id="banner" hidden></div>
+
+      <section class="transcript" id="transcript" aria-live="polite">
+        <div class="empty" id="empty">
+          <h2>Premi il pulsante rosso e parla.</h2>
+          <p>Il testo compare qui mentre le persone parlano, ognuna con il suo colore. L'audio viene elaborato in questo browser e scartato subito: si salva solo il testo.</p>
+          <p class="hint">Al primo avvio vengono scaricati i modelli (da 100 MB a 1,4 GB secondo la qualità scelta). Poi restano in cache.</p>
+        </div>
+        <ol class="lines" id="lines"></ol>
+      </section>
+
+      <section class="settings-view" id="settingsView" hidden aria-labelledby="settingsTitle">
+        <header class="settings-head">
+          <button class="icon-btn" type="button" id="closeSettings" aria-label="Torna alla trascrizione" title="Torna alla trascrizione">
+            <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
+          <h2 id="settingsTitle">Impostazioni</h2>
+        </header>
+        <div class="settings-body">
+
+      <fieldset class="field engine">
+        <legend>Dove trascrivere</legend>
+        <label class="choice">
+          <input type="radio" name="engine" value="local">
+          <span><b>Su questo dispositivo</b><small>Gratis, privato: l'audio non esce dal browser. Precisione secondo la qualità scelta.</small></span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="engine" value="groq">
+          <span><b>Nel cloud con Groq</b><small>Modello Whisper più grande, più preciso, non usa la scheda grafica. Gratis fino a 8 ore di audio al giorno. L'audio delle frasi viene inviato a Groq.</small></span>
+        </label>
+
+      <div id="groqBox" class="sub">
+        <label class="field">
+          <span>Chiave API Groq</span>
+          <input id="optGroqKey" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…">
+          <small class="help">Creala gratis su <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>. Resta salvata solo in questo browser.</small>
+        </label>
+        <label class="field">
+          <span>Modello cloud</span>
+          <select id="optGroqModel">
+            <option value="whisper-large-v3">Whisper large-v3 (il più preciso)</option>
+            <option value="whisper-large-v3-turbo">Whisper large-v3 turbo (più veloce)</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="field" id="localModelBox">
+        <span>Qualità trascrizione</span>
+        <select id="optModel">
+          <option value="base">Veloce (circa 100 MB, va bene anche su telefono)</option>
+          <option value="small">Accurata (circa 450 MB, consigliata con scheda grafica)</option>
+          <option value="turbo">Massima (circa 1,4 GB, solo schede grafiche recenti)</option>
+        </select>
+      </label>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend>Lingua e microfono</legend>
+      <label class="field">
+        <span>Lingua parlata</span>
+        <select id="optLang">
+          <option value="it">Italiano</option>
+          <option value="en">Inglese</option>
+          <option value="fr">Francese</option>
+          <option value="es">Spagnolo</option>
+          <option value="de">Tedesco</option>
+          <option value="pt">Portoghese</option>
+          <option value="auto">Rileva automaticamente</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Microfono</span>
+        <select id="optMic"><option value="">Predefinito di sistema</option></select>
+      </label>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend>Interlocutori</legend>
+        <label class="check"><input type="checkbox" id="optSpk" checked> Distingui chi parla</label>
+        <label class="range">
+          <span>Separazione voci <output id="optThrOut"></output></span>
+          <input type="range" id="optThr" min="0.25" max="0.8" step="0.01">
+          <small>Più alta: crea nuove persone più facilmente. Più bassa: unisce voci simili.</small>
+        </label>
+        <label class="range">
+          <span>Numero massimo di persone <output id="optMaxOut"></output></span>
+          <input type="range" id="optMax" min="1" max="8" step="1">
+        </label>
+        <label class="check"><input type="checkbox" id="optMerge"> Unisci le frasi consecutive della stessa persona</label>
+        <label class="range" id="mergeGapBox">
+          <span>Unisci se la pausa è al massimo <output id="optMergeGapOut"></output></span>
+          <input type="range" id="optMergeGap" min="2" max="60" step="1">
+        </label>
+        <button type="button" class="btn small" id="mergeNow">Unisci ora nella trascrizione aperta</button>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend>Ascolto</legend>
+        <label class="check"><input type="checkbox" id="optLive" checked> Mostra il testo mentre si parla</label>
+        <label class="range">
+          <span>Sensibilità voce <output id="optVadOut"></output></span>
+          <input type="range" id="optVad" min="0.3" max="0.85" step="0.05">
+          <small>Alza in ambienti rumorosi.</small>
+        </label>
+        <label class="range">
+          <span>Pausa che chiude una frase <output id="optPauseOut"></output></span>
+          <input type="range" id="optPause" min="300" max="1500" step="100">
+        </label>
+        <label class="range">
+          <span>Memoria audio massima <output id="optBufOut"></output></span>
+          <input type="range" id="optBuf" min="30" max="600" step="30">
+          <small>Audio in attesa di trascrizione. Oltre il limite, i pezzi più vecchi vengono scartati.</small>
+        </label>
+      </fieldset>
+
+      <p class="device" id="deviceInfo"></p>
+        </div>
+      </section>
+
+      <footer class="dock">
+        <div class="dock-left">
+          <span class="timer" id="timer">00:00</span>
+          <div class="level" aria-hidden="true"><i id="levelBar"></i></div>
+          <select id="source" class="source" aria-label="Cosa ascoltare" title="Cosa ascoltare">
+            <option value="mic">Microfono</option>
+            <option value="tab">Scheda o schermo</option>
+            <option value="both">Scheda + microfono</option>
+          </select>
+        </div>
+        <div class="dock-center">
+          <button class="rec" id="recBtn" aria-label="Avvia registrazione">
+            <span class="rec-dot"></span>
+          </button>
+          <button class="btn ghost small" id="stopBtn" hidden>Termina</button>
+        </div>
+        <div class="dock-right">
+          <p class="status" id="status">Pronto</p>
+          <div class="progress" id="progress" hidden><i id="progressBar"></i></div>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <div class="menu" id="exportMenu" role="menu" hidden>
+    <button role="menuitem" data-export="copy">Copia testo</button>
+    <button role="menuitem" data-export="txt">Scarica .txt</button>
+    <button role="menuitem" data-export="md">Scarica .md</button>
+    <button role="menuitem" data-export="srt">Scarica sottotitoli .srt</button>
+    <button role="menuitem" data-export="json">Scarica .json</button>
+    <hr>
+    <button role="menuitem" data-export="delete" class="danger">Elimina trascrizione</button>
+  </div>
+
+  <div class="menu" id="speakerMenu" role="menu" hidden></div>
+
+
+  <dialog id="confirm" class="sheet small">
+    <form method="dialog">
+      <h2 id="confirmTitle"></h2>
+      <p id="confirmText"></p>
+      <footer>
+        <button class="btn ghost" value="no">Annulla</button>
+        <button class="btn danger" value="yes" id="confirmYes">Elimina</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="speakerDlg" class="sheet small">
+    <form method="dialog">
+      <h2>Persona</h2>
+      <label class="field"><span>Nome</span><input id="spkName" maxlength="40" autocomplete="off"></label>
+      <label class="field"><span>Unisci con</span><select id="spkMerge"><option value="">Nessuno</option></select>
+        <small class="help">Le frasi passano alla persona scelta, che prende il nome scritto sopra.</small></label>
+      <footer>
+        <button class="btn ghost" value="no">Annulla</button>
+        <button class="btn primary" value="yes">Salva</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
